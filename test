@@ -1,0 +1,82 @@
+use rust_fsm::*;
+
+// 定义输入类型
+#[derive(Clone, Debug, PartialEq)]
+enum SyncInput {
+    StartSync,
+    SectorSynced,
+    VolumeSynced,
+}
+
+// 定义输出类型
+#[derive(Clone, Debug, PartialEq)]
+enum SyncOutput {
+    SyncingSector(u32),
+    SyncingVolume(u32),
+    SyncComplete,
+}
+
+// 定义状态机
+struct SyncStateMachine {
+    diskc_bitmap: DiskcBitmap,
+}
+
+// 定义 DiskcBitmap 数据结构
+struct DiskcBitmap {
+    bms_count: u32,
+    bms_index: u32,
+    volgroups: Vec<VolGroup>,
+}
+
+// 定义 VolGroup 数据结构
+struct VolGroup {
+    start: u32,
+    end: u32,
+    index: u32,
+}
+
+impl StateMachineImpl for SyncStateMachine {
+    type Input = SyncInput;
+    type State = ();
+    type Output = Option<SyncOutput>;
+
+    fn transition(
+        &mut self,
+        _state: Self::State,
+        input: &Self::Input,
+    ) -> (Self::State, Self::Output) {
+        match input {
+            SyncInput::StartSync => {
+                let volgroup = &self.diskc_bitmap.volgroups[self.diskc_bitmap.bms_index as usize];
+                let sector_index = volgroup.index;
+                ((), Some(SyncOutput::SyncingSector(sector_index)))
+            }
+            SyncInput::SectorSynced => {
+                let volgroup =
+                    &mut self.diskc_bitmap.volgroups[self.diskc_bitmap.bms_index as usize];
+                volgroup.index += 1;
+                if volgroup.index > volgroup.end {
+                    ((), Some(SyncOutput::VolumeSynced(self.diskc_bitmap.bms_index)))
+                } else {
+                    let sector_index = volgroup.index;
+                    ((), Some(SyncOutput::SyncingSector(sector_index)))
+                }
+            }
+            SyncInput::VolumeSynced => {
+                self.diskc_bitmap.bms_index += 1;
+                if self.diskc_bitmap.bms_index >= self.diskc_bitmap.bms_count {
+                    ((), Some(SyncOutput::SyncComplete))
+                } else {
+                    let volgroup =
+                        &self.diskc_bitmap.volgroups[self.diskc_bitmap.bms_index as usize];
+                    let sector_index = volgroup.index;
+                    ((), Some(SyncOutput::SyncingSector(sector_index)))
+                }
+            }
+        }
+    }
+
+    fn is_final_state(&self, _state: &Self::State) -> bool {
+        false
+    }
+}

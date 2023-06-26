@@ -1,6 +1,5 @@
 use md5;
 
-// 定义输入类型
 #[derive(Clone, Debug, PartialEq)]
 enum SyncInput {
     StartSync,
@@ -8,7 +7,6 @@ enum SyncInput {
     VolumeSynced,
 }
 
-// 定义输出类型
 #[derive(Clone, Debug, PartialEq)]
 enum SyncOutput {
     SyncingSector(u32, String),
@@ -16,10 +14,8 @@ enum SyncOutput {
     SyncComplete,
 }
 
-// 定义状态机
 struct SyncStateMachine;
 
-// 定义 DiskcBitmap 数据结构
 #[derive(Clone)]
 struct DiskcBitmap {
     bms_count: u32,
@@ -27,7 +23,6 @@ struct DiskcBitmap {
     volgroups: Vec<VolGroup>,
 }
 
-// 定义 VolGroup 数据结构
 #[derive(Clone)]
 struct VolGroup {
     start: u32,
@@ -66,7 +61,7 @@ impl StateMachineImpl for SyncStateMachine {
             SyncInput::StartSync => {
                 let volgroup = &state.volgroups[state.bms_index as usize];
                 let sector_index = volgroup.index;
-                // 读取扇区数据并计算 MD5 值
+              
                 let sector_data = read_sector_data(sector_index);
                 let md5_digest = format!("{:x}", md5::compute(sector_data));
                 Some(SyncOutput::SyncingSector(sector_index, md5_digest))
@@ -77,7 +72,7 @@ impl StateMachineImpl for SyncStateMachine {
                     Some(SyncOutput::VolumeSynced(state.bms_index))
                 } else {
                     let sector_index = volgroup.index;
-                    // 读取扇区数据并计算 MD5 值
+                    
                     let sector_data = read_sector_data(sector_index);
                     let md5_digest = format!("{:x}", md5::compute(sector_data));
                     Some(SyncOutput::SyncingSector(sector_index, md5_digest))
@@ -89,7 +84,7 @@ impl StateMachineImpl for SyncStateMachine {
                 } else {
                     let volgroup = &state.volgroups[state.bms_index as usize];
                     let sector_index = volgroup.index;
-                    // 读取扇区数据并计算 MD5 值
+                   
                     let sector_data = read_sector_data(sector_index);
                     let md5_digest = format!("{:x}", md5::compute(sector_data));
                     Some(SyncOutput::SyncingSector(sector_index, md5_digest))
@@ -99,7 +94,6 @@ impl StateMachineImpl for SyncStateMachine {
     }
 }
 
-// 模拟读取扇区数据的函数
 fn read_sector_data(_sector_index: u32) -> Vec<u8> {
     vec![0; 512]
 }

@@ -80,3 +80,37 @@ impl StateMachineImpl for SyncStateMachine {
         false
     }
 }
+
+
+let diskc_bitmap = DiskcBitmap {
+    bms_count: 2,
+    bms_index: 0,
+    volgroups: vec![
+        VolGroup {
+            start: 0,
+            end: 1,
+            index: 0,
+        },
+        VolGroup {
+            start: 0,
+            end: 1,
+            index: 0,
+        },
+    ],
+};
+let mut machine = StateMachine::new_with_state(SyncStateMachine { diskc_bitmap }, ());
+
+let output = machine.consume(&SyncInput::StartSync);
+assert_eq!(output, Some(SyncOutput::SyncingSector(0)));
+
+let output = machine.consume(&SyncInput::SectorSynced);
+assert_eq!(output, Some(SyncOutput::VolumeSynced(0)));
+
+let output = machine.consume(&SyncInput::VolumeSynced);
+assert_eq!(output, Some(SyncOutput::SyncingSector(0)));
+
+let output = machine.consume(&SyncInput::SectorSynced);
+assert_eq!(output, Some(SyncOutput::VolumeSynced(1)));
+
+let output = machine.consume(&SyncInput::VolumeSynced);
+assert_eq!(output, Some(SyncOutput::SyncComplete));

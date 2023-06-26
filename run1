@@ -1,0 +1,119 @@
+use md5;
+
+
+#[derive(Clone, Debug, PartialEq)]
+enum SyncInput {
+    StartSync,
+    StartSyncRead,
+    StartSyncDataSend,
+    StartSyncDataRecvAck,
+    StartSyncMetaData,
+    SyncMetaDataComplete,
+    SectorSynced,
+    VolumeSynced,
+}
+
+
+#[derive(Clone, Debug, PartialEq)]
+enum SyncOutput {
+    SyncingSector(u32, String),
+    SyncingVolume(u32),
+    SyncComplete,
+}
+
+
+struct SyncStateMachine;
+
+
+#[derive(Clone)]
+struct DiskcBitmap {
+    bms_count: u32,
+    bms_index: u32,
+    volgroups: Vec<VolGroup>,
+}
+
+
+#[derive(Clone)]
+struct VolGroup {
+    start: u32,
+    end: u32,
+    index: u32,
+}
+
+impl StateMachineImpl for SyncStateMachine {
+    type Input = SyncInput;
+    type State = DiskcBitmap;
+    type Output = Option<SyncOutput>;
+
+    const INITIAL_STATE: Self::State = DiskcBitmap {
+        bms_count: 0,
+        bms_index: 0,
+        volgroups: Vec::new(),
+    };
+
+    fn transition(state: &Self::State, input: &Self::Input) -> Option<Self::State> {
+        let mut new_state = state.clone();
+        match input {
+            SyncInput::StartSync => {}
+            SyncInput::StartSyncRead => {
+                let volgroup = &mut new_state.volgroups[new_state.bms_index as usize];
+                volgroup.index += 1;
+            }
+            SyncInput::StartSyncDataSend => {}
+            SyncInput::StartSyncDataRecvAck => {}
+            SyncInput::StartSyncMetaData => {}
+            SyncInput::SyncMetaDataComplete => {}
+            SyncInput::SectorSynced => {}
+            SyncInput::VolumeSynced => {
+                new_state.bms_index += 1;
+            }
+        }
+        Some(new_state)
+    }
+
+    fn output(state: &Self::State, input: &Self::Input) -> Option<Self::Output> {
+        match input {
+            SyncInput::StartSync => {
+                let volgroup = &state.volgroups[state.bms_index as usize];
+                let sector_index = volgroup.index;
+                
+                let sector_data = read_sector_data(sector_index);
+                let md5_digest = format!("{:x}", md5::compute(sector_data));
+                Some(SyncOutput::SyncingSector(sector_index, md5_digest))
+            }
+            SyncInput::StartSyncRead => Some(SyncOutput::SyncingVolume(state.bms_index)),
+            SyncInput::StartSyncDataSend => None,
+            SyncInput::StartSyncDataRecvAck => None,
+            SyncInput::StartSyncMetaData => None,
+            SyncInput::SyncMetaDataComplete => None,
+            SyncInput::SectorSynced => {
+                let volgroup = &state.volgroups[state.bms_index as usize];
+                if volgroup.index > volgroup.end {
+                    Some(SyncOutput::VolumeSynced(state.bms_index))
+                } else {
+                    let sector_index = volgroup.index;
+                 
+                    let sector_data = read_sector_data(sector_index);
+                    let md5_digest = format!("{:x}", md5::compute(sector_data));
+                    Some(SyncOutput::SyncingSector(sector_index, md5_digest))
+                }
+            }
+            SyncInput::VolumeSynced => {
+                if state.bms_index >= state.bms_count {
+                    Some(SyncOutput::SyncComplete)
+                } else {
+                    let volgroup = &state.volgroups[state.bms_index as usize];
+                    let sector_index = volgroup.index;
+       
+                    let sector_data = read_sector_data(sector_index);
+                    let md5_digest = format!("{:x}", md5::compute(sector_data));
+                    Some(SyncOutput::SyncingSector(sector_index, md5_digest))
+                }
+            }
+        }
+    }
+}
+
+fn read_sector_data(_sector_index: u32) -> Vec<u8> {
+    vec![0; 512]
+}

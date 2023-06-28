@@ -1,116 +1,87 @@
-use rust_fsm::*;
+extern crate winapi;
 
+use std::io::Error;
+use std::mem;
+use std::ptr;
+use winapi::shared::minwindef::{DWORD, LPVOID};
+use winapi::shared::ntdef::{HANDLE, NULL};
+use winapi::um::fileapi::{CreateFileA, ReadFile, SetFilePointerEx};
+use winapi::um::handleapi::CloseHandle;
+use winapi::um::winbase::{FILE_BEGIN, FILE_SHARE_READ, FILE_SHARE_WRITE};
+use winapi::um::winnt::{FILE_ATTRIBUTE_NORMAL, GENERIC_READ};
 
-#[derive(Clone, Debug, PartialEq)]
-enum SyncInput {
-    StartSync,
-    SectorSynced,
-    VolumeSynced,
+const SECTOR_SIZE: usize = 512;
+
+pub struct DiskReader {
+    handle: HANDLE,
 }
 
+impl DiskReader {
+    pub fn new(disk_number: u32) -> Result<DiskReader, Error> {
+        let disk_path = format!(r#"\\.\PhysicalDrive{}"#, disk_number);
+        let handle = unsafe {
+            CreateFileA(
+                disk_path.as_ptr() as *const i8,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                ptr::null_mut(),
+                3,
+                FILE_ATTRIBUTE_NORMAL,
+                NULL,
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(Error::last_os_error());
+        }
+        Ok(DiskReader { handle })
+    }
 
-#[derive(Clone, Debug, PartialEq)]
-enum SyncOutput {
-    SyncingSector(u32),
-    SyncingVolume(u32),
-    SyncComplete,
-}
-
-
-struct SyncStateMachine {
-    diskc_bitmap: DiskcBitmap,
-}
-
-
-struct DiskcBitmap {
-    bms_count: u32,
-    bms_index: u32,
-    volgroups: Vec<VolGroup>,
-}
-
-
-struct VolGroup {
-    start: u32,
-    end: u32,
-    index: u32,
-}
-
-impl StateMachineImpl for SyncStateMachine {
-    type Input = SyncInput;
-    type State = ();
-    type Output = Option<SyncOutput>;
-
-    fn transition(
-        &mut self,
-        _state: Self::State,
-        input: &Self::Input,
-    ) -> (Self::State, Self::Output) {
-        match input {
-            SyncInput::StartSync => {
-                let volgroup = &self.diskc_bitmap.volgroups[self.diskc_bitmap.bms_index as usize];
-                let sector_index = volgroup.index;
-                ((), Some(SyncOutput::SyncingSector(sector_index)))
-            }
-            SyncInput::SectorSynced => {
-                let volgroup =
-                    &mut self.diskc_bitmap.volgroups[self.diskc_bitmap.bms_index as usize];
-                volgroup.index += 1;
-                if volgroup.index > volgroup.end {
-                    ((), Some(SyncOutput::VolumeSynced(self.diskc_bitmap.bms_index)))
-                } else {
-                    let sector_index = volgroup.index;
-                    ((), Some(SyncOutput::SyncingSector(sector_index)))
-                }
-            }
-            SyncInput::VolumeSynced => {
-                self.diskc_bitmap.bms_index += 1;
-                if self.diskc_bitmap.bms_index >= self.diskc_bitmap.bms_count {
-                    ((), Some(SyncOutput::SyncComplete))
-                } else {
-                    let volgroup =
-                        &self.diskc_bitmap.volgroups[self.diskc_bitmap.bms_index as usize];
-                    let sector_index = volgroup.index;
-                    ((), Some(SyncOutput::SyncingSector(sector_index)))
-                }
+    pub fn read_sector(&self, sector: i64, buffer: &mut [u8]) -> Result<(), Error> {
+        if buffer.len() < SECTOR_SIZE {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Buffer size is less than sector size",
+            ));
+        }
+        let mut overlapped = unsafe { mem::zeroed() };
+        let mut bytes_read = 0;
+        let offset: i64 = sector * SECTOR_SIZE as i64;
+        unsafe {
+            let mut li: LARGE_INTEGER = mem::zeroed();
+            li.QuadPart = offset;
+            SetFilePointerEx(self.handle, li, ptr::null_mut(), FILE_BEGIN);
+            if ReadFile(
+                self.handle,
+                buffer.as_mut_ptr() as LPVOID,
+                buffer.len() as DWORD,
+                &mut bytes_read,
+                &mut overlapped,
+            ) == 0
+            {
+                return Err(Error::last_os_error());
             }
         }
-    }
-
-    fn is_final_state(&self, _state: &Self::State) -> bool {
-        false
+        Ok(())
     }
 }
 
+impl Drop for DiskReader {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.handle) };
+    }
+}
+use std::io::Error;
 
-let diskc_bitmap = DiskcBitmap {
-    bms_count: 2,
-    bms_index: 0,
-    volgroups: vec![
-        VolGroup {
-            start: 0,
-            end: 1,
-            index: 0,
-        },
-        VolGroup {
-            start: 0,
-            end: 1,
-            index: 0,
-        },
-    ],
-};
-let mut machine = StateMachine::new_with_state(SyncStateMachine { diskc_bitmap }, ());
+fn main() -> Result<(), Error> {
+    let disk_number = 0; // 磁盘编号
+    let sector = 0; // 扇区编号
+    let mut buffer = [0u8; 512]; // 缓冲区
 
-let output = machine.consume(&SyncInput::StartSync);
-assert_eq!(output, Some(SyncOutput::SyncingSector(0)));
+    let reader = DiskReader::new(disk_number)?;
+    reader.read_sector(sector, &mut buffer)?;
 
-let output = machine.consume(&SyncInput::SectorSynced);
-assert_eq!(output, Some(SyncOutput::VolumeSynced(0)));
+    // 在此处处理读取到的数据
+    println!("Data: {:?}", &buffer[..]);
 
-let output = machine.consume(&SyncInput::VolumeSynced);
-assert_eq!(output, Some(SyncOutput::SyncingSector(0)));
-
-let output = machine.consume(&SyncInput::SectorSynced);
-assert_eq!(output, Some(SyncOutput::VolumeSynced(1)));
-
-let output = machine.consume(&SyncInput::VolumeSynced);
-assert_eq!(output, Some(SyncOutput::SyncComplete));
+    Ok(())
+}

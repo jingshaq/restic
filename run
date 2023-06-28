@@ -1,99 +1,74 @@
-use md5;
+extern crate winapi;
 
-#[derive(Clone, Debug, PartialEq)]
-enum SyncInput {
-    StartSync,
-    SectorSynced,
-    VolumeSynced,
+use std::io::{Error, ErrorKind};
+use std::mem;
+use std::ptr;
+use winapi::shared::minwindef::{DWORD, LPVOID};
+use winapi::shared::ntdef::{HANDLE, NULL};
+use winapi::um::fileapi::{CreateFile2, ReadFile, SetFilePointerEx};
+use winapi::um::handleapi::CloseHandle;
+use winapi::um::minwinbase::{CREATEFILE2_EXTENDED_PARAMETERS, SECURITY_ATTRIBUTES};
+use winapi::um::winbase::{FILE_BEGIN, FILE_SHARE_READ, FILE_SHARE_WRITE};
+use winapi::um::winnt::{FILE_ATTRIBUTE_NORMAL, GENERIC_READ};
+
+const SECTOR_SIZE: usize = 512;
+
+pub struct DiskReader {
+    handle: HANDLE,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-enum SyncOutput {
-    SyncingSector(u32, String),
-    SyncingVolume(u32),
-    SyncComplete,
-}
-
-struct SyncStateMachine;
-
-#[derive(Clone)]
-struct DiskcBitmap {
-    bms_count: u32,
-    bms_index: u32,
-    volgroups: Vec<VolGroup>,
-}
-
-#[derive(Clone)]
-struct VolGroup {
-    start: u32,
-    end: u32,
-    index: u32,
-}
-
-impl StateMachineImpl for SyncStateMachine {
-    type Input = SyncInput;
-    type State = DiskcBitmap;
-    type Output = Option<SyncOutput>;
-
-    const INITIAL_STATE: Self::State = DiskcBitmap {
-        bms_count: 0,
-        bms_index: 0,
-        volgroups: Vec::new(),
-    };
-
-    fn transition(state: &Self::State, input: &Self::Input) -> Option<Self::State> {
-        let mut new_state = state.clone();
-        match input {
-            SyncInput::StartSync => {}
-            SyncInput::SectorSynced => {
-                let volgroup = &mut new_state.volgroups[new_state.bms_index as usize];
-                volgroup.index += 1;
-            }
-            SyncInput::VolumeSynced => {
-                new_state.bms_index += 1;
-            }
+impl DiskReader {
+    pub fn new(disk_number: u32) -> Result<DiskReader, Error> {
+        let disk_path = format!(r#"\\.\PhysicalDrive{}"#, disk_number);
+        let mut params: CREATEFILE2_EXTENDED_PARAMETERS = unsafe { mem::zeroed() };
+        params.dwSize = mem::size_of::<CREATEFILE2_EXTENDED_PARAMETERS>() as DWORD;
+        params.dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
+        let handle = unsafe {
+            CreateFile2(
+                disk_path.as_ptr(),
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                3,
+                &mut params as *mut CREATEFILE2_EXTENDED_PARAMETERS,
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(Error::last_os_error());
         }
-        Some(new_state)
+        Ok(DiskReader { handle })
     }
 
-    fn output(state: &Self::State, input: &Self::Input) -> Option<Self::Output> {
-        match input {
-            SyncInput::StartSync => {
-                let volgroup = &state.volgroups[state.bms_index as usize];
-                let sector_index = volgroup.index;
-              
-                let sector_data = read_sector_data(sector_index);
-                let md5_digest = format!("{:x}", md5::compute(sector_data));
-                Some(SyncOutput::SyncingSector(sector_index, md5_digest))
-            }
-            SyncInput::SectorSynced => {
-                let volgroup = &state.volgroups[state.bms_index as usize];
-                if volgroup.index > volgroup.end {
-                    Some(SyncOutput::VolumeSynced(state.bms_index))
-                } else {
-                    let sector_index = volgroup.index;
-                    
-                    let sector_data = read_sector_data(sector_index);
-                    let md5_digest = format!("{:x}", md5::compute(sector_data));
-                    Some(SyncOutput::SyncingSector(sector_index, md5_digest))
-                }
-            }
-            SyncInput::VolumeSynced => {
-                if state.bms_index >= state.bms_count {
-                    Some(SyncOutput::SyncComplete)
-                } else {
-                    let volgroup = &state.volgroups[state.bms_index as usize];
-                    let sector_index = volgroup.index;
-                   
-                    let sector_data = read_sector_data(sector_index);
-                    let md5_digest = format!("{:x}", md5::compute(sector_data));
-                    Some(SyncOutput::SyncingSector(sector_index, md5_digest))
-                }
+    pub fn read_sector(&self, sector: i64, buffer: &mut [u8]) -> Result<(), Error> {
+        if buffer.len() < SECTOR_SIZE {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Buffer size is less than sector size",
+            ));
+        }
+        let mut overlapped = unsafe { mem::zeroed() };
+        let mut bytes_read = 0;
+        let offset: i64 = sector * SECTOR_SIZE as i64;
+        unsafe {
+            let mut li: LARGE_INTEGER = mem::zeroed();
+            li.QuadPart = offset;
+            SetFilePointerEx(self.handle, li, ptr::null_mut(), FILE_BEGIN);
+            if ReadFile(
+                self.handle,
+                buffer.as_mut_ptr() as LPVOID,
+                buffer.len() as DWORD,
+                &mut bytes_read,
+                &mut overlapped,
+            ) == 0
+            {
+                return Err(Error::last_os_error());
             }
         }
+        Ok(())
     }
 }
 
-fn read_sector_data(_sector_index: u32) -> Vec<u8> {
-    vec![0; 512]
+impl Drop for DiskReader {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.handle) };
+    }
 }
